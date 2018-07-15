@@ -26,7 +26,7 @@ from distutils.core import setup, Extension
 module = Extension('_lxc', sources=['lxc.c'], libraries=['lxc'])
 
 setup(name='lxc-python2',
-      version='0.1',
+      version='0.1-ric1',
       description='Python2 bindings for LXC',
       long_description='The lxc-python2 package contains lxc bindings for python2',
       license='LGPLv2+',

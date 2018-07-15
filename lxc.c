@@ -106,20 +106,20 @@ convert_tuple_to_char_pointer_array(PyObject *argv) {
         }
 
         /* We must make a copy of str, because it points into internal memory
-         * which we do not own.  Assume it's NULL terminated, otherwise we'd
+         * which we do not own.  Assume it's NUL terminated, otherwise we'd
          * have to use PyUnicode_AsUTF8AndSize() and be explicit about copying
          * the memory.
          */
         result[i] = strdup(str);
 
-        /* Do not decref pyobj since we stole a reference by using
-         * PyTuple_GET_ITEM().
-         */
-//        Py_DECREF(pystr);
         if (result[i] == NULL) {
             PyErr_SetNone(PyExc_MemoryError);
             goto error;
         }
+        /* Do not decref pyobj since we stole a reference by using
+         * PyTuple_GET_ITEM().
+         */
+//        Py_DECREF(pystr);
     }
 
     result[argc] = NULL;
@@ -212,6 +212,7 @@ static lxc_attach_options_t *lxc_attach_parse_options(PyObject *kwds)
 
     if (!parse_result) {
         lxc_attach_free_options(options);
+        PyErr_SetString(PyExc_ValueError, "Unable to parse keywords.");
         return NULL;
     }
 
@@ -237,6 +238,7 @@ static lxc_attach_options_t *lxc_attach_parse_options(PyObject *kwds)
         options->stdin_fd = PyObject_AsFileDescriptor(stdin_obj);
         if (options->stdin_fd < 0) {
             lxc_attach_free_options(options);
+            PyErr_SetString(PyExc_ValueError, "Unable to parse STDIN");
             return NULL;
         }
     }
@@ -244,6 +246,7 @@ static lxc_attach_options_t *lxc_attach_parse_options(PyObject *kwds)
         options->stdout_fd = PyObject_AsFileDescriptor(stdout_obj);
         if (options->stdout_fd < 0) {
             lxc_attach_free_options(options);
+            PyErr_SetString(PyExc_ValueError, "Unable to parse STDOUT");
             return NULL;
         }
     }
@@ -251,6 +254,7 @@ static lxc_attach_options_t *lxc_attach_parse_options(PyObject *kwds)
         options->stderr_fd = PyObject_AsFileDescriptor(stderr_obj);
         if (options->stderr_fd < 0) {
             lxc_attach_free_options(options);
+            PyErr_SetString(PyExc_ValueError, "Unable to parse STDERR");
             return NULL;
         }
     }
@@ -290,8 +294,10 @@ LXC_attach_run_command(PyObject *self, PyObject *arg)
         NULL          /* argv[] */
     };
 
-    if (!PyArg_ParseTuple(arg, "sO", (const char**)&cmd.program, &args_obj))
+    if (!PyArg_ParseTuple(arg, "sO", (const char**)&cmd.program, &args_obj)) {
+        PyErr_SetString(PyExc_ValueError, "No executable to run");
         return NULL;
+    }
     if (args_obj && PyList_Check(args_obj)) {
         cmd.argv = convert_tuple_to_char_pointer_array(args_obj);
     } else {
@@ -300,8 +306,10 @@ LXC_attach_run_command(PyObject *self, PyObject *arg)
         return NULL;
     }
 
-    if (!cmd.argv)
+    if (!cmd.argv) {
+        PyErr_SetString(PyExc_ValueError, "argv cannot be empty");
         return NULL;
+    }
 
     rv = lxc_attach_run_command(&cmd);
 
@@ -329,9 +337,10 @@ LXC_get_global_config_item(PyObject *self, PyObject *args, PyObject *kwds)
     char* key = NULL;
     const char* value = NULL;
 
-    if (! PyArg_ParseTupleAndKeywords(args, kwds, "s|", kwlist,
-                                      &key))
+    if (! PyArg_ParseTupleAndKeywords(args, kwds, "s|", kwlist, &key)) {
+        PyErr_SetString(PyExc_KeyError, "Undefined configuration name");
         return NULL;
+    }
 
     value = lxc_get_global_config_item(key);
 
@@ -371,8 +380,10 @@ LXC_list_containers(PyObject *self, PyObject *args, PyObject *kwds)
     if (! PyArg_ParseTupleAndKeywords(args, kwds, "|OOs", kwlist,
                                       &py_list_active,
                                       &py_list_defined,
-                                      &config_path, &vargs))
+                                      &config_path, &vargs)) {
+        PyErr_SetString(PyExc_TypeError, "Invalid arguments");
         return NULL;
+    }
 
     /* We default to listing everything */
     if (py_list_active && py_list_active != Py_True) {
@@ -393,7 +404,7 @@ LXC_list_containers(PyObject *self, PyObject *args, PyObject *kwds)
 
     /* Handle failure */
     if (list_count < 0) {
-        PyErr_SetString(PyExc_ValueError, "failure to list containers");
+        PyErr_SetString(PyExc_ValueError, "Unable to list containers");
         return NULL;
     }
 
@@ -431,18 +442,25 @@ Container_init(Container *self, PyObject *args, PyObject *kwds)
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|O&", kwlist,
                                       &name,
-                                      PyUnicode_FSConverter, &fs_config_path))
+                                      PyUnicode_FSConverter, &fs_config_path)) {
+        PyErr_SetString(PyExc_TypeError, "Invalid arguments");
         return -1;
+    }
 
     if (fs_config_path != NULL) {
         config_path = PyBytes_AS_STRING(fs_config_path);
-        assert(config_path != NULL);
+        if (!config_path) {
+            PyErr_SetString(PyExc_TypeError, "Unable to determine config_path");
+            return -1;
+        }
     }
 
     self->container = lxc_container_new(name, config_path);
     if (!self->container) {
         Py_XDECREF(fs_config_path);
-        fprintf(stderr, "%d: error creating container %s\n", __LINE__, name);
+        fprintf(stderr, "%d: error creating container %s using config path %s\n",
+            __LINE__, name, config_path ? config_path : "NULL");
+        PyErr_SetString(PyExc_ValueError, "Unable to create container");
         return -1;
     }
 
@@ -533,16 +551,21 @@ Container_add_device_node(Container *self, PyObject *args, PyObject *kwds)
 
     if (py_src_path != NULL) {
         src_path = PyBytes_AS_STRING(py_src_path);
-        assert(src_path != NULL);
+        if (src_path == NULL) {
+            PyErr_SetString(PyExc_ValueError, "Unable to determine src_path");
+            return NULL;
+        }
     }
 
     if (py_dst_path != NULL) {
         dst_path = PyBytes_AS_STRING(py_dst_path);
-        assert(dst_path != NULL);
+        if (dst_path == NULL) {
+            PyErr_SetString(PyExc_ValueError, "Unable to determine dst_path");
+            return NULL;
+        }
     }
 
-    if (self->container->add_device_node(self->container, src_path,
-                                         dst_path)) {
+    if (self->container->add_device_node(self->container, src_path, dst_path)) {
         Py_XDECREF(py_src_path);
         Py_XDECREF(py_dst_path);
         Py_RETURN_TRUE;
